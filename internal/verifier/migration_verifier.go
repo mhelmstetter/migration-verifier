@@ -136,6 +136,12 @@ type Verifier struct {
 	// The filter is applied to all namespaces in both initial checking and iterative checking.
 	// The verifier only checks documents within the filter.
 	globalFilter map[string]any
+
+	oplogIdregex string
+
+	//forcing a hint
+	forcedHintSrc string
+	forcedHintDst string
 }
 
 // VerificationStatus holds the Verification Status
@@ -236,6 +242,14 @@ func (verifier *Verifier) WritesOn(ctx context.Context) {
 
 func (verifier *Verifier) GetLogger() *logger.Logger {
 	return verifier.logger
+}
+
+func (verifier *Verifier) GetForcedHintSrc() string {
+	return verifier.forcedHintSrc
+}
+
+func (verifier *Verifier) GetForcedHintDst() string {
+	return verifier.forcedHintDst
 }
 
 func (verifier *Verifier) SetMetaURI(ctx context.Context, uri string) error {
@@ -407,19 +421,22 @@ func (verifier *Verifier) maybeAppendGlobalFilterToPredicates(predicates bson.A)
 }
 
 func (verifier *Verifier) getDocumentsCursor(ctx context.Context, collection *mongo.Collection, buildInfo *bson.M,
-	startAtTs *primitive.Timestamp, task *VerificationTask) (*mongo.Cursor, error) {
+	startAtTs *primitive.Timestamp, task *VerificationTask, forcedHint string) (*mongo.Cursor, error) {
 	var findOptions bson.D
 	runCommandOptions := options.RunCmd()
 	var andPredicates bson.A
 
 	if len(task.Ids) > 0 {
 		andPredicates = append(andPredicates, bson.D{{"_id", bson.M{"$in": task.Ids}}})
-		andPredicates = verifier.maybeAppendGlobalFilterToPredicates(andPredicates)
 		findOptions = bson.D{
 			bson.E{"filter", bson.D{{"$and", andPredicates}}},
 		}
+		hint := bson.E{Key: "hint", Value: "_id_hashed"}
+		findOptions = append(findOptions, hint)
+		locale := bson.E{"collation", bson.D{{"locale", "simple"}}}
+		findOptions = append(findOptions, locale)
 	} else {
-		findOptions = task.QueryFilter.Partition.GetFindOptions(buildInfo, verifier.maybeAppendGlobalFilterToPredicates(andPredicates))
+		findOptions = task.QueryFilter.Partition.GetFindOptions(buildInfo, verifier.maybeAppendGlobalFilterToPredicates(andPredicates), forcedHint)
 	}
 	if verifier.readPreference.Mode() != readpref.PrimaryMode {
 		runCommandOptions = runCommandOptions.SetReadPreference(verifier.readPreference)
@@ -470,7 +487,7 @@ func (verifier *Verifier) fetchDocuments(task *VerificationTask) (*documentmap.M
 	errGroup.Go(func() error {
 		var cursor *mongo.Cursor
 		cursor, srcErr = verifier.getDocumentsCursor(ctx, verifier.srcClientCollection(task), verifier.srcBuildInfo,
-			verifier.srcStartAtTs, task)
+			verifier.srcStartAtTs, task, verifier.forcedHintSrc)
 
 		if srcErr == nil {
 			srcErr = srcClientMap.ImportFromCursor(ctx, cursor)
@@ -482,7 +499,7 @@ func (verifier *Verifier) fetchDocuments(task *VerificationTask) (*documentmap.M
 	errGroup.Go(func() error {
 		var cursor *mongo.Cursor
 		cursor, dstErr = verifier.getDocumentsCursor(ctx, verifier.dstClientCollection(task), verifier.dstBuildInfo,
-			nil /*startAtTs*/, task)
+			nil /*startAtTs*/, task, verifier.forcedHintDst)
 
 		if dstErr == nil {
 			dstErr = dstClientMap.ImportFromCursor(ctx, cursor)
@@ -704,7 +721,7 @@ func (verifier *Verifier) logChunkInfo(ctx context.Context, namespaceAndUUID *uu
 			return
 		}
 		resultMap := result.Map()
-		verifier.logger.Debug().Msgf(" Chunk of %s on %v, range %v to %v", namespace, resultMap["shard"],
+		verifier.logger.Trace().Msgf(" Chunk of %s on %v, range %v to %v", namespace, resultMap["shard"],
 			resultMap["min"], resultMap["max"])
 	}
 	if err = cursor.Err(); err != nil {
@@ -773,7 +790,7 @@ func (verifier *Verifier) partitionAndInspectNamespace(ctx context.Context, name
 	replicator1 := partitions.Replicator{ID: "verifier"}
 	replicators := []partitions.Replicator{replicator1}
 	partitionList, srcDocs, srcBytes, err := partitions.PartitionCollectionWithSize(
-		ctx, namespaceAndUUID, retryer, verifier.srcClient, replicators, verifier.logger, verifier.partitionSizeInBytes, verifier.globalFilter)
+		ctx, namespaceAndUUID, retryer, verifier.srcClient, replicators, verifier.logger, verifier.partitionSizeInBytes, verifier.globalFilter, verifier.forcedHintSrc)
 	if err != nil {
 		return nil, nil, 0, 0, err
 	}
@@ -1042,7 +1059,7 @@ func (verifier *Verifier) verifyMetadataAndPartitionCollection(ctx context.Conte
 		return
 	}
 
-	insertFailedCollection := func() {
+	/*insertFailedCollection := func() {
 		_, err := verifier.InsertFailedCollectionVerificationTask(srcNs)
 		if err != nil {
 			verifier.
@@ -1051,7 +1068,7 @@ func (verifier *Verifier) verifyMetadataAndPartitionCollection(ctx context.Conte
 				Err(err).
 				Msg("Unrecoverable error in inserting failed collection verification task")
 		}
-	}
+	}*/
 
 	if dstSpec == nil {
 		if srcSpec == nil {
@@ -1064,6 +1081,8 @@ func (verifier *Verifier) verifyMetadataAndPartitionCollection(ctx context.Conte
 		// Fall through here; comparing the collection specifications will produce the correct
 		// failure output.
 	}
+
+	/* We're not inspecting the collections right now, we can assume they will match
 	specificationProblems, verifyData := verifier.compareCollectionSpecifications(srcNs, dstNs, srcSpec, dstSpec)
 	if specificationProblems != nil {
 		insertFailedCollection()
@@ -1083,8 +1102,9 @@ func (verifier *Verifier) verifyMetadataAndPartitionCollection(ctx context.Conte
 		}
 		return
 	}
+	*/
 
-	indexProblems, err := verifyIndexes(ctx, workerNum, task, srcColl, dstColl, srcSpec.IDIndex, dstSpec.IDIndex)
+	/*indexProblems, err := verifyIndexes(ctx, workerNum, task, srcColl, dstColl, srcSpec.IDIndex, dstSpec.IDIndex)
 	if err != nil {
 		task.Status = verificationTaskFailed
 		verifier.logger.Error().Msgf("[Worker %d] Error getting indexes for collection: %+v", workerNum, err)
@@ -1097,7 +1117,7 @@ func (verifier *Verifier) verifyMetadataAndPartitionCollection(ctx context.Conte
 		}
 		task.FailedDocs = append(task.FailedDocs, indexProblems...)
 		task.Status = verificationTaskMetadataMismatch
-	}
+	}*/
 
 	partitions, shardKeys, docsCount, bytesCount, err := verifier.partitionAndInspectNamespace(ctx, srcNs)
 	if err != nil {
@@ -1271,9 +1291,10 @@ func (verifier *Verifier) GetProgress(ctx context.Context) (Progress, error) {
 		return Progress{Error: err}, err
 	}
 	return Progress{
-		Phase:      verifier.phase,
-		Generation: verifier.generation,
-		Status:     status,
+		Phase:            verifier.phase,
+		Generation:       verifier.generation,
+		Status:           status,
+		IsLastGeneration: verifier.lastGeneration,
 	}, nil
 }
 

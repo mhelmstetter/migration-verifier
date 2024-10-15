@@ -149,6 +149,7 @@ func (verifier *Verifier) InsertPartitionVerificationTask(partition *partitions.
 			To:        dstNamespace,
 		},
 	}
+	verifier.logger.Debug().Msg("Inserting one verification task")
 	_, err := verifier.verificationTaskCollection().InsertOne(context.Background(), verificationTask)
 	return &verificationTask, err
 }

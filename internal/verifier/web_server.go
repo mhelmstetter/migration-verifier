@@ -21,7 +21,7 @@ const RequestInProgressErrorDescription = "Another request is currently in progr
 
 // MigrationVerifierAPI represents the interaction webserver with mongosync
 type MigrationVerifierAPI interface {
-	Check(ctx context.Context, filter map[string]any)
+	Check(ctx context.Context, filter map[string]any, forcedHintSrc string, forcedHintDst string, oplogIdRegex string)
 	WritesOff(ctx context.Context)
 	WritesOn(ctx context.Context)
 	GetProgress(ctx context.Context) (Progress, error)
@@ -186,7 +186,10 @@ type EmptyRequest struct{}
 
 // CheckRequest is for requests to the /check endpoint.
 type CheckRequest struct {
-	Filter map[string]any `json:"filter"`
+	Filter       map[string]any `json:"filter"`
+	HintSrc      string         `json:"hintSrc"`
+	HintDst      string         `json:"hintDst"`
+	OplogIdRegex string         `json:"oplogIdRegex"`
 }
 
 func (server *WebServer) checkEndPoint(c *gin.Context) {
@@ -198,7 +201,7 @@ func (server *WebServer) checkEndPoint(c *gin.Context) {
 		return
 	}
 
-	server.Mapi.Check(context.Background(), req.Filter)
+	server.Mapi.Check(context.Background(), req.Filter, req.HintSrc, req.HintDst, req.OplogIdRegex)
 	//if err != nil {
 	//	server.operationalErrorResponse(c, err)
 	//	return
@@ -220,23 +223,34 @@ func (server *WebServer) writesOffEndpoint(c *gin.Context) {
 
 // Progress represents the structure of the JSON response from the Progress end point.
 type Progress struct {
-	Phase      string              `json:"phase"`
-	Generation int                 `json:"generation"`
-	Error      error               `json:"error"`
-	Status     *VerificationStatus `json:"verificationStatus"`
+	Phase            string              `json:"phase"`
+	Generation       int                 `json:"generation"`
+	Error            error               `json:"error"`
+	Status           *VerificationStatus `json:"verificationStatus"`
+	IsLastGeneration bool                `json:"isLastGeneration"`
 }
 
 // progressEndpoint implements the gin handle for the progress endpoint.
 func (server *WebServer) progressEndpoint(c *gin.Context) {
-	progress, err := server.Mapi.GetProgress(c.Request.Context())
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"error": err.Error()})
-		return
+	type ProgOutcome struct {
+		Progress Progress
+		error    error
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"progress": progress,
-	})
+	result := make(chan ProgOutcome)
+	go func() {
+		progress, err := server.Mapi.GetProgress(c.Request.Context())
+		result <- ProgOutcome{progress, err}
+	}()
+
+	select {
+	case <-time.After(3 * time.Second):
+		c.JSON(http.StatusRequestTimeout, gin.H{"error": "Progress request timed out; server busy"})
+		return
+	case p := <-result:
+		c.JSON(http.StatusOK, gin.H{"progress": p.Progress})
+		return
+	}
 }
 
 func successResponse(c *gin.Context) {

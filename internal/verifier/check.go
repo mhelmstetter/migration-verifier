@@ -33,9 +33,9 @@ var verificationStatusCheckInterval time.Duration = 15 * time.Second
 // testChan is a pair of channels for coordinating generations in tests.
 // testChan[0] is a channel signalled when when a generation is complete
 // testChan[1] is a channel signalled when Check should continue with the next generation.
-func (verifier *Verifier) Check(ctx context.Context, filter map[string]any) {
+func (verifier *Verifier) Check(ctx context.Context, filter map[string]any, forcedHintSrc string, forcedHintDst string, oplogIdRegex string) {
 	go func() {
-		err := verifier.CheckDriver(ctx, filter)
+		err := verifier.CheckDriver(ctx, filter, forcedHintSrc, forcedHintDst, oplogIdRegex)
 		if err != nil {
 			verifier.logger.Fatal().Err(err).Msgf("Fatal error in generation %d", verifier.generation)
 		}
@@ -122,7 +122,7 @@ func (verifier *Verifier) CheckWorker(ctx context.Context) error {
 	return nil
 }
 
-func (verifier *Verifier) CheckDriver(ctx context.Context, filter map[string]any, testChan ...chan struct{}) error {
+func (verifier *Verifier) CheckDriver(ctx context.Context, filter map[string]any, forcedHintSrc string, forcedHintDst string, oplogIdRegex string, testChan ...chan struct{}) error {
 	verifier.mux.Lock()
 	if verifier.running {
 		verifier.mux.Unlock()
@@ -131,6 +131,9 @@ func (verifier *Verifier) CheckDriver(ctx context.Context, filter map[string]any
 	}
 	verifier.running = true
 	verifier.globalFilter = filter
+	verifier.forcedHintSrc = forcedHintSrc
+	verifier.forcedHintDst = forcedHintDst
+	verifier.oplogIdregex = oplogIdRegex
 	verifier.mux.Unlock()
 	defer func() {
 		verifier.mux.Lock()
@@ -149,7 +152,7 @@ func (verifier *Verifier) CheckDriver(ctx context.Context, filter map[string]any
 	if err != nil {
 		return err
 	}
-	verifier.logger.Debug().Msg("Starting Check")
+	verifier.logger.Debug().Str("HintSrc", verifier.forcedHintSrc).Str("HintDst", verifier.forcedHintDst).Msg("Starting Check")
 
 	verifier.phase = Check
 	defer func() {
@@ -227,6 +230,7 @@ func (verifier *Verifier) CheckDriver(ctx context.Context, filter map[string]any
 		}
 		verifier.generation++
 		verifier.phase = Recheck
+		verifier.logger.Debug().Msg("Moved to recheck phase, generating recheck tasks")
 		err = verifier.GenerateRecheckTasks(ctx)
 		if err != nil {
 			verifier.mux.Unlock()

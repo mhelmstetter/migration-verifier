@@ -60,6 +60,8 @@ func (verifier *Verifier) insertRecheckDocs(
 
 	generation, _ := verifier.getGenerationWhileLocked()
 
+	//regex := regexp.MustCompile(verifier.oplogIdregex)
+
 	models := []mongo.WriteModel{}
 	for i, documentID := range documentIDs {
 		pk := RecheckPrimaryKey{
@@ -68,6 +70,11 @@ func (verifier *Verifier) insertRecheckDocs(
 			CollectionName: collName,
 			DocumentID:     documentID,
 		}
+
+		/*if !regex.MatchString(strings.Trim(fmt.Sprintf("%s", documentID), "\"")) {
+			verifier.logger.Trace().Msgf("did not match oplog filter: %s", fmt.Sprintf("%s", documentID))
+			continue
+		}*/
 
 		// The filter must exclude DataSize; otherwise, if a failed comparison
 		// and a change event happen on the same document for the same
@@ -85,10 +92,12 @@ func (verifier *Verifier) insertRecheckDocs(
 			mongo.NewReplaceOneModel().
 				SetFilter(filterDoc).SetReplacement(recheckDoc).SetUpsert(true))
 	}
-	_, err := verifier.verificationDatabase().Collection(recheckQueue).BulkWrite(ctx, models)
-	verifier.logger.Debug().Msgf("Persisted %d recheck doc(s) for generation %d", len(models), generation)
-
-	return err
+	if len(models) > 0 {
+		_, err := verifier.verificationDatabase().Collection(recheckQueue).BulkWrite(ctx, models)
+		verifier.logger.Debug().Msgf("Persisted %d recheck doc(s) for generation %d", len(models), generation)
+		return err
+	}
+	return nil
 }
 
 // ClearRecheckDocs deletes the previous generation’s recheck
@@ -163,6 +172,7 @@ func (verifier *Verifier) GenerateRecheckTasks(ctx context.Context) error {
 			dataSizeAccum >= verifier.partitionSizeInBytes {
 			namespace := prevDBName + "." + prevCollName
 			if len(idAccum) > 0 {
+				verifier.logger.Debug().Msg("About to insert batched failed Ids verification task")
 				err := verifier.InsertFailedIdsVerificationTask(idAccum, types.ByteCount(dataSizeAccum), namespace)
 				if err != nil {
 					return err
@@ -184,6 +194,7 @@ func (verifier *Verifier) GenerateRecheckTasks(ctx context.Context) error {
 	}
 	if len(idAccum) > 0 {
 		namespace := prevDBName + "." + prevCollName
+		verifier.logger.Debug().Msg("About to insert final failed Ids verification task")
 		err := verifier.InsertFailedIdsVerificationTask(idAccum, types.ByteCount(dataSizeAccum), namespace)
 		if err != nil {
 			return err

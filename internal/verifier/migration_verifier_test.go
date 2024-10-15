@@ -1365,7 +1365,7 @@ func (suite *MultiDataVersionTestSuite) TestGenerationalRechecking() {
 	checkDoneChan := make(chan struct{})
 	checkContinueChan := make(chan struct{})
 	go func() {
-		err := verifier.CheckDriver(ctx, nil, checkDoneChan, checkContinueChan)
+		err := verifier.CheckDriver(ctx, nil, "_id", "_id", checkDoneChan, checkContinueChan)
 		suite.Require().NoError(err)
 	}()
 
@@ -1481,7 +1481,7 @@ func (suite *MultiDataVersionTestSuite) TestVerifierWithFilter() {
 	checkDoneChan := make(chan struct{})
 	checkContinueChan := make(chan struct{})
 	go func() {
-		err := verifier.CheckDriver(ctx, filter, checkDoneChan, checkContinueChan)
+		err := verifier.CheckDriver(ctx, filter, "_id", "_id", checkDoneChan, checkContinueChan)
 		suite.Require().NoError(err)
 	}()
 

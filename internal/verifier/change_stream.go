@@ -64,6 +64,17 @@ func (verifier *Verifier) GetChangeStreamFilter() []bson.D {
 		filter = append(filter, bson.D{{"ns", bson.D{{"db", db}, {"coll", coll}}}})
 	}
 	stage := bson.D{{"$match", bson.D{{"$or", filter}}}}
+	if len(verifier.globalFilter) > 0 {
+		filterClone := make(map[string]any)
+		for k2, v2 := range verifier.globalFilter {
+			filterClone["fullDocument."+k2] = v2
+		}
+		var andPredicates bson.A
+		andPredicates = append(andPredicates, bson.D{{"$or", filter}})
+		andPredicates = append(andPredicates, filterClone)
+		stage = bson.D{{"$match", bson.D{{"$and", andPredicates}}}}
+	}
+
 	return []bson.D{stage}
 }
 
@@ -124,6 +135,9 @@ func (verifier *Verifier) StartChangeStream(ctx context.Context, startTime *prim
 	if startTime != nil {
 		opts = opts.SetStartAtOperationTime(startTime)
 		verifier.srcStartAtTs = startTime
+	}
+	if len(verifier.globalFilter) > 0 {
+		opts = opts.SetFullDocument(*options.ChangeStream().FullDocument)
 	}
 	sess, err := verifier.srcClient.StartSession()
 	if err != nil {

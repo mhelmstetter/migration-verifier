@@ -21,13 +21,14 @@ type WebServerTestSuite struct {
 
 type MockVerifier struct {
 	filter map[string]any
+	hint   string
 }
 
 func NewMockVerifier() *MockVerifier {
 	return &MockVerifier{}
 }
 
-func (verifier *MockVerifier) Check(ctx context.Context, filter map[string]any) {
+func (verifier *MockVerifier) Check(ctx context.Context, filter map[string]any, hint string) {
 	verifier.filter = filter
 }
 func (verifier *MockVerifier) WritesOff(ctx context.Context) {}

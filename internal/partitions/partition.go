@@ -126,7 +126,7 @@ func (p *Partition) FindCmd(
 	if len(batchSize) > 0 {
 		findCmd = append(findCmd, bson.E{"batchSize", batchSize[0]})
 	}
-	findOptions := p.GetFindOptions(nil, nil)
+	findOptions := p.GetFindOptions(nil, nil, "_id_")
 	findCmd = append(findCmd, findOptions...)
 
 	return findCmd
@@ -137,7 +137,7 @@ func (p *Partition) FindCmd(
 // (e.g. use the partitions on the source to read the destination for verification)
 // If the passed-in buildinfo indicates a mongodb version < 5.0, type bracketing is not used.
 // filterAndPredicates is a slice of filter criteria that's used to construct the "filter" field in the find option.
-func (p *Partition) GetFindOptions(buildInfo *bson.M, filterAndPredicates bson.A) bson.D {
+func (p *Partition) GetFindOptions(buildInfo *bson.M, filterAndPredicates bson.A, forcedHint string) bson.D {
 	if p == nil {
 		if len(filterAndPredicates) > 0 {
 			return bson.D{{"filter", bson.D{{"$and", filterAndPredicates}}}}
@@ -173,11 +173,14 @@ func (p *Partition) GetFindOptions(buildInfo *bson.M, filterAndPredicates bson.A
 		} else {
 			filterAndPredicates = append(filterAndPredicates, p.filterWithTypeBracketing())
 		}
-
-		hint := bson.E{"hint", bson.D{{"_id", 1}}}
+		hint := bson.E{Key: "hint", Value: forcedHint}
 		findOptions = append(findOptions, hint)
 	}
 
+	if forcedHint == "_id_hashed" || forcedHint == "fat_case_sensitive_index_2" || forcedHint == "CompanyId__id" {
+		locale := bson.E{"collation", bson.D{{"locale", "simple"}}}
+		findOptions = append(findOptions, locale)
+	}
 	if len(filterAndPredicates) > 0 {
 		findOptions = append(findOptions, bson.E{"filter", bson.D{{"$and", filterAndPredicates}}})
 	}
